@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.chatbot_service import generate_bot_response, stream_bot_response
 from app.classification_service import classify_trace
-from app.database import get_db
+from app.config import settings
+from app.database import SessionLocal, get_db
 
 router = APIRouter(prefix="/traces", tags=["traces"])
 
@@ -28,11 +29,14 @@ async def create_trace(payload: schemas.TraceCreate, db: Session = Depends(get_d
     if not bot_response:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "The LLM returned an empty response. "
-                "Make sure the llama3 model is pulled: "
-                "docker exec -it supportlens_ollama ollama pull llama3"
-            ),
+            detail={
+                "error": "llm_unavailable",
+                "message": "The LLM service did not return a response.",
+                "hint": (
+                    f"Ensure Ollama is running and the model '{settings.ollama_model}' "
+                    f"is available. Check GET /health for dependency status."
+                ),
+            },
         )
 
     # ── 2. Classify the conversation ──────────────────────────────────────────
@@ -54,7 +58,7 @@ async def create_trace(payload: schemas.TraceCreate, db: Session = Depends(get_d
 
 
 @router.post("/stream")
-async def create_trace_stream(payload: schemas.TraceCreate, db: Session = Depends(get_db)):
+async def create_trace_stream(payload: schemas.TraceCreate):
     """Stream the bot response token-by-token via SSE, then classify and persist.
 
     Events emitted:
@@ -75,7 +79,7 @@ async def create_trace_stream(payload: schemas.TraceCreate, db: Session = Depend
         response_time_ms = int((time.perf_counter() - t_start) * 1000)
 
         if not bot_response:
-            yield f"data: {json.dumps({'type': 'error', 'detail': 'LLM returned an empty response. Make sure llama3 is pulled.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'detail': f'LLM service unavailable. Ensure Ollama is running and model {settings.ollama_model!r} is pulled.'})}\n\n"
             return
 
         category_str = await classify_trace(payload.user_message, bot_response)
@@ -88,9 +92,17 @@ async def create_trace_stream(payload: schemas.TraceCreate, db: Session = Depend
             timestamp=datetime.now(timezone.utc),
             response_time_ms=response_time_ms,
         )
-        db.add(trace)
-        db.flush()
-        db.refresh(trace)
+
+        db = SessionLocal()
+        try:
+            db.add(trace)
+            db.commit()
+            db.refresh(trace)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
         trace_data = {
             "id": trace.id,

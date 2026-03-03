@@ -11,7 +11,7 @@ class TraceCreate(BaseModel):
     """Input for POST /traces — only the raw user message is required.
     The bot response, category, and timing are all derived server-side.
     """
-    user_message: str = Field(..., min_length=1, description="The message sent by the user")
+    user_message: str = Field(..., min_length=1, max_length=2000, description="The message sent by the user")
 
 
 class TraceResponse(BaseModel):
