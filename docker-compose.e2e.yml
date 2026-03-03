@@ -1,0 +1,31 @@
+# E2E / CI override — replaces the real Ollama container with a lightweight
+# stdlib Python mock so the pipeline never needs a GPU or a pulled model.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d
+#
+# This file is intentionally NOT merged into docker-compose.yml so that
+# production deployments are never accidentally pointed at the mock.
+
+services:
+  ollama:
+    image: python:3.11-slim
+    container_name: supportlens_ollama
+    command: ["python3", "/app/mock_ollama.py"]
+    volumes:
+      - ./scripts/mock_ollama.py:/app/mock_ollama.py:ro
+    ports:
+      - "11434:11434"
+    # Override the real Ollama healthcheck (which needs the 'ollama' binary)
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:11434/')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s

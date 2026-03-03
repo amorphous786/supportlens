@@ -15,8 +15,10 @@ var/
 sdist/
 develop-eggs/
 .installed.cfg
-lib/
-lib64/
+/lib/
+/lib64/
+# Ensure frontend source lib is never accidentally ignored
+!frontend/src/lib/
 .venv/
 venv/
 ENV/
