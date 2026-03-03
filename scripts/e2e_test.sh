@@ -35,6 +35,11 @@ json_field() {
   python3 -c "import sys,json; d=json.load(sys.stdin); print(d$1)" 2>/dev/null || echo ""
 }
 
+# Expect stdin to be a JSON array; print its length (or 0 if not a list).
+json_array_length() {
+  python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else 0)" 2>/dev/null || echo "0"
+}
+
 http_status() {
   curl -s -o /dev/null -w "%{http_code}" "$@"
 }
@@ -158,7 +163,7 @@ fi
 if [ -n "$TRACE_CAT" ] && [ "$TRACE_CAT" != "None" ]; then
   ENCODED_CAT=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${TRACE_CAT}'))")
   FILTER_LIST=$(curl -sf "$API/api/v1/traces/?category=${ENCODED_CAT}")
-  FILTER_COUNT=$(echo "$FILTER_LIST" | json_field "__len__(d)")
+  FILTER_COUNT=$(echo "$FILTER_LIST" | json_array_length)
 
   if [ "$FILTER_COUNT" -ge 1 ]; then
     pass "Category filter '${TRACE_CAT}' returns ≥1 result"
@@ -225,7 +230,7 @@ fi
 
 # ── 11. Read-path still works while LLM is down ───────────────────────────────
 
-LIST_COUNT=$(curl -sf "$API/api/v1/traces/" | json_field "__len__(d)")
+LIST_COUNT=$(curl -sf "$API/api/v1/traces/" | json_array_length)
 if [ "$LIST_COUNT" -ge 0 ]; then
   pass "GET /traces still works while Ollama is down (${LIST_COUNT} traces returned)"
 else
