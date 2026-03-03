@@ -1,12 +1,15 @@
+import json
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.chatbot_service import generate_bot_response
+from app.chatbot_service import generate_bot_response, stream_bot_response
 from app.classification_service import classify_trace
 from app.database import get_db
 
@@ -48,6 +51,65 @@ async def create_trace(payload: schemas.TraceCreate, db: Session = Depends(get_d
     db.flush()
     db.refresh(trace)
     return trace
+
+
+@router.post("/stream")
+async def create_trace_stream(payload: schemas.TraceCreate, db: Session = Depends(get_db)):
+    """Stream the bot response token-by-token via SSE, then classify and persist.
+
+    Events emitted:
+      {"type": "token",  "content": "<text fragment>"}
+      {"type": "done",   "trace": {<full TraceResponse>}}
+      {"type": "error",  "detail": "<message>"}
+    """
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        t_start = time.perf_counter()
+        tokens: list[str] = []
+
+        async for token in stream_bot_response(payload.user_message):
+            tokens.append(token)
+            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+
+        bot_response = "".join(tokens)
+        response_time_ms = int((time.perf_counter() - t_start) * 1000)
+
+        if not bot_response:
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'LLM returned an empty response. Make sure llama3 is pulled.'})}\n\n"
+            return
+
+        category_str = await classify_trace(payload.user_message, bot_response)
+
+        trace = models.Trace(
+            id=str(uuid.uuid4()),
+            user_message=payload.user_message,
+            bot_response=bot_response,
+            category=category_str,
+            timestamp=datetime.now(timezone.utc),
+            response_time_ms=response_time_ms,
+        )
+        db.add(trace)
+        db.flush()
+        db.refresh(trace)
+
+        trace_data = {
+            "id": trace.id,
+            "user_message": trace.user_message,
+            "bot_response": trace.bot_response,
+            "category": trace.category,
+            "timestamp": trace.timestamp.isoformat(),
+            "response_time_ms": trace.response_time_ms,
+        }
+        yield f"data: {json.dumps({'type': 'done', 'trace': trace_data})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/", response_model=list[schemas.TraceResponse])

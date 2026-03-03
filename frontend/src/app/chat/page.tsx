@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import CategoryBadge from "@/components/CategoryBadge";
 import Spinner from "@/components/Spinner";
-import { tracesApi } from "@/lib/api";
+import { streamTrace } from "@/lib/api";
 import type { Trace } from "@/types";
 
 interface Message {
@@ -22,6 +22,7 @@ export default function ChatPage() {
   const [messages,  setMessages]  = useState<Message[]>([]);
   const [input,     setInput]     = useState("");
   const [loading,   setLoading]   = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [error,     setError]     = useState<string | null>(null);
   const bottomRef   = useRef<HTMLDivElement>(null);
   const inputRef    = useRef<HTMLTextAreaElement>(null);
@@ -36,24 +37,44 @@ export default function ChatPage() {
 
     setInput("");
     setError(null);
-    setMessages((prev) => [...prev, { role: "user", text }]);
+    setMessages((prev) => [...prev, { role: "user", text }, { role: "bot", text: "" }]);
     setLoading(true);
+    setStreaming(false);
 
     try {
-      const trace = await tracesApi.create(text);
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: trace.bot_response, trace },
-      ]);
+      await streamTrace(text, (event) => {
+        if (event.type === "token") {
+          setStreaming(true);
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            updated[updated.length - 1] = { ...last, text: last.text + event.content };
+            return updated;
+          });
+        } else if (event.type === "done") {
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { ...updated[updated.length - 1], trace: event.trace };
+            return updated;
+          });
+        } else if (event.type === "error") {
+          throw new Error(event.detail);
+        }
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       setError(msg);
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: "Sorry, I couldn't process your request right now. Please try again." },
-      ]);
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          text: "Sorry, I couldn't process your request right now. Please try again.",
+        };
+        return updated;
+      });
     } finally {
       setLoading(false);
+      setStreaming(false);
       inputRef.current?.focus();
     }
   }
@@ -124,8 +145,8 @@ export default function ChatPage() {
               <MessageBubble key={i} message={msg} />
             ))}
 
-            {/* Loading bubble */}
-            {loading && (
+            {/* Loading bubble — only shown before the first token arrives */}
+            {loading && !streaming && (
               <div className="flex items-start gap-3 py-2">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-100">
                   <svg className="h-4 w-4 text-brand-600" fill="currentColor" viewBox="0 0 24 24">

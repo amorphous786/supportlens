@@ -1,6 +1,6 @@
 import logging
 
-from app.llm_client import call_llama
+from app.llm_client import _CLASSIFY_NUM_PREDICT, call_llama
 from app.models import Category
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ async def classify_trace(user_message: str, bot_response: str) -> str:
     raw = await call_llama(
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
+        num_predict=_CLASSIFY_NUM_PREDICT,
     )
 
     category = raw.strip().strip(".")
